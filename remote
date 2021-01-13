@@ -9,16 +9,16 @@ import subprocess
 import atexit
 import random
 
-#from subprocess import Popen, PIPE, STDOUT
-
 # ============================================================================ #
 # constants
 
 shell     = "/usr/bin/bash"                                                     # start this bash on the server
 
-machines  = ["phy310", "phy311", "phy312", "phy313", "phy314",                  # try if either of these machines is responsive 
+machines  = ["phy300", "phy301", "phy302", "phy303", "phy304",                  # try if either of these machines is responsive 
+             "phy305", "phy306", "phy307", "phy308", "phy309", 
+             "phy310", "phy311", "phy312", "phy313", "phy314",                  # try if either of these machines is responsive 
              "phy315", "phy316", "phy317", "phy318", "phy319", 
-             "phy320"]
+             "phy320", "phy321", "phy322", "phy323", "phy324"]
 machineID = -1                                                                  # send all commands to this machine
 
 standardCWD = os.path.abspath( os.path.curdir )                                 # used to create locks on files
@@ -349,13 +349,35 @@ def do () :
     print()
     print("done.")
 
+# ............................................................................ #
+def run () :
+    if len(cmdline) == 1 :
+        raiseColored("missing required information: script to execute")
+    
+    parseOptionals(2)
+    findfreeMachine ()
+    
+    cmd = f"cd {params['serverdir']}; bash -s"
+    ssh = f"ssh -tt {params['username']}@{machines[machineID]}.{params['server']} '{cmd}' < {cmdline[1]}"
+    
+    
+    print("sending command:")
+    print(colors.bold, "\t", ssh, colors.reset)
+    
+    print()
+    os.system(ssh)
+    print()
+    print("done.")
+
+
 # ---------------------------------------------------------------------------- #
 def helpPage() :
     pages = {
         ""     : helpGeneric,
         "push" : helpPush,
         "pull" : helpPull,
-        "do"   : helpDo
+        "do"   : helpDo,
+        "run"  : helpRun
     }
     
     if len(cmdline) in (0, 1) : 
@@ -365,6 +387,8 @@ def helpPage() :
     if cmdline[1] in pages :
         pages[cmdline[1]]()
         exit
+    else :
+        print(f"no help available on '{cmdline[1]}'")
     
     exit()
 
@@ -394,18 +418,6 @@ def helpGeneric() :
     print(colors.bold, end="")
     print("  run <script file>", colors.reset)
     print("    run <script file> on the server.")
-    print("      Before execution of the script, a bash in <serverdir> is started.")
-    print("      The script file may be given with an absolute path or relative to the cwd.")
-    print("      Note that heredocs are supported.")
-    print(colors.bold, end="")
-    print("  sequence <local sequence file>", colors.reset)
-    print("    perform a sequence of remote commands as specified in <local sequence file>.")
-    print("      Each line of a sequence file is supposed to be a valid remote line without")
-    print("      the remote command itself. For example, a sequence file could look like:")
-    print("        push settings.ini")
-    print("        do 'project settings.ini'")
-    print("        pull results/ tar localdir run_17")
-    print("      Leading whitespaces will be ignored.")
     print(colors.bold, end="")
     print("  vars", colors.reset)
     print("    show values of the runtime variables.")
@@ -579,6 +591,36 @@ def helpDo () :
     print(colors.bold, "  remote do 'ls; ls -l'", colors.reset, sep="")
     print("will perform 'ls' and 'ls -l' in sequence.")
 
+# ............................................................................ #
+def helpRun () :
+    print("details on keyword: run")
+    
+    print(colors.bold)
+    print("  remote run '<script file>'", colors.reset)
+    print(colors.reset)
+    print("Executes <script file> on the server in a bash.")
+    print()
+    
+    print(colors.bold)
+    print("<script file>", colors.reset," is the file to be executed.", sep="")
+    print("  It is assumed that <script file> can be found in <localdir> and that its")
+    print("    executable flat is set.")
+    print("  Note that there are different shells around. Remote will start a bash.")
+    print("    You can identify your server's shell")
+    print("    using the command '", colors.bold, "echo $0", colors.reset, "' which you can send via 'remote do'.", sep="")
+    print("    To avoid ambiguity, always start your scripts with a shebang:")
+    print(colors.bold, "      #!/path/to/your/shell", colors.reset, sep="")
+    print()
+    print("Before <script file> is executed, the current working directory on the server")
+    print("  is set to <serverdir>.")
+    print ()
+    print("Enclosing your script file in quotation marks (either 'single' or \"double\"")
+    print("  quotes) allows you to use whitespaces in your path or file name. However,") 
+    print("  command line arguments to your script cannot be used.")
+    print("  Should you need the full bash magic, push your script to the server and")
+    print("  execute it there, e.g. with")
+    print(colors.bold, "    remote do './yourScript yourParams'", colors.reset, sep="")
+
 # ---------------------------------------------------------------------------- #
 def varsPage() :
     parseOptionals()
@@ -616,7 +658,8 @@ cmdline = sys.argv[1:]
 keywordProcs = {
   "push" : push,
   "pull" : pull,
-  "do"   : do
+  "do"   : do,
+  "run"  : run
 }
 
 # ---------------------------------------------------------------------------- #
