@@ -7,6 +7,7 @@ import os
 import sys
 import subprocess
 import atexit
+import random
 
 #from subprocess import Popen, PIPE, STDOUT
 
@@ -326,13 +327,35 @@ def pull () :
             os.system(cmd)
     
     print("done.")
+
+# ............................................................................ #
+def do () :
+    if len(cmdline) == 1 :
+        raiseColored("missing required information: command to execute")
     
+    parseOptionals(2)
+    findfreeMachine ()
+    
+    # exec {shell}; 
+    cmd = f"cd {params['serverdir']}; {cmdline[1]}"
+    ssh = f"ssh -tt {params['username']}@{machines[machineID]}.{params['server']} '{cmd}'"
+    
+    
+    print("sending command:")
+    print(colors.bold, "\t", ssh, colors.reset)
+    
+    print()
+    os.system(ssh)
+    print()
+    print("done.")
+
 # ---------------------------------------------------------------------------- #
 def helpPage() :
     pages = {
         ""     : helpGeneric,
         "push" : helpPush,
-        "pull" : helpPull
+        "pull" : helpPull,
+        "do"   : helpDo
     }
     
     if len(cmdline) in (0, 1) : 
@@ -357,21 +380,23 @@ def helpGeneric() :
     print(colors.reset)
     print("where <keyword> is one of these:")
     print(colors.bold)
-    print("  push <local filename> [as <server filename>] [tar [gz]] [test]", colors.reset)
+    print("  push <local  filename> [as <server filename>] [tar [gz]] [test]", colors.reset)
     print("    uploads a file to the server.")
     print(colors.bold, end="")
-    print("  pull <server file>  [as <local filename>] [tar [gz]] [test]", colors.reset)
+    print("  pull <server filename> [as <local  filename>] [tar [gz]] [test]", colors.reset)
     print("    downloads a file or directory from the server.")
+    print(colors.bold, end="")
+    print("  do '<command>'", colors.reset)
+    print("    execute single line command <command> on the server.")
+    print(colors.bold, end="")
+    print("  pipe", colors.reset)
+    print("    send stdin to the server and run there as a command line. Supports heredocs.")
     print(colors.bold, end="")
     print("  run <script file>", colors.reset)
     print("    run <script file> on the server.")
     print("      Before execution of the script, a bash in <serverdir> is started.")
     print("      The script file may be given with an absolute path or relative to the cwd.")
     print("      Note that heredocs are supported.")
-    print(colors.bold, end="")
-    print("  do '<command>'", colors.reset)
-    print("    execute single line command <command> on the server.")
-    print("      before execution of the script, a bash in <serverdir> is started")
     print(colors.bold, end="")
     print("  sequence <local sequence file>", colors.reset)
     print("    perform a sequence of remote commands as specified in <local sequence file>.")
@@ -469,7 +494,7 @@ def helpPush () :
     print("    '<serverdir>/foobar/'")
     
     print(colors.bold)
-    print("tar", colors.reset," is a flag that instructs the script to apply gnuzip compression to the", sep="")
+    print("gz", colors.reset," is a flag that instructs the script to apply gnuzip compression to the", sep="")
     print("  tar archives. I.e., file names will end in '.tar.gz' and file size will likely")
     print("    be smaller.")
     
@@ -482,15 +507,77 @@ def helpPull () :
     print("details on keyword: pull")
     
     print(colors.bold)
-    print("  remote pull <server file>  [as <local filename>] [tar [gz]] [test]", colors.reset)
+    print("  remote pull <server file> [as <local filename>] [tar [gz]] [test]", colors.reset)
     print(colors.reset)
-    print("uploads a file to the server.")
+    print("downloads a file from the server.")
+    
+    print(colors.bold)
+    print("<server filename>", colors.reset," is the file to be downloaded.", sep="")
+    print("  It is assumed to be found in <serverdir>.")
+    print("    (See help on optional keyword serverdir.)")
+    print("  It may contain wildcards, and will then push all matching files.")
+    print(colors.bold, "  FOR THE USE OF WILDCARS, PUT EVERYTHING IN QUOTATION MARKS!", colors.reset, sep="")
+    print("  Example:")
+    print(colors.bold, "    remote pull \"foo/*\"", colors.reset, sep="")
+    print("  will download all files in '<serverdir>/foo/' into '<localdir>'.")
+    print("  On the other hand:")
+    print(colors.bold, "    remote pull foo/*", colors.reset, sep="")
+    print("  will likely fail, if there is more than one file matching the pattern.")
+    print("    (bash is stupid, sometimes.)")
+    
+    print(colors.bold)
+    print("<local filename>", colors.reset," is the file name as which to save the file.", sep="")
+    print("  Do yourself a favour and put only directory names here.")
+    print("  The file name will be taken from <server filename>, without path specification,")
+    print("    obviously. Use the optional parameter test to see the effekts.")
+    
+    print(colors.bold)
+    print("tar", colors.reset," is a flag that instructs the script to put <server filename> into a tar", sep="")
+    print("    archive before upload. On the local machine, the archive will be unpacked.")
     
     
-    print("      The behaviour of push is mirrored.")
-    print("      The download goes into cwd, unless specified otherwise using the")
-    print("      localdir optional keyword")
+    print(colors.bold)
+    print("gz", colors.reset," is a flag that instructs the script to apply gnuzip compression to the", sep="")
+    print("  tar archives. I.e., file names will end in '.tar.gz' and file size will likely")
+    print("    be smaller.")
     
+    print(colors.bold)
+    print("test", colors.reset," is a flag that instructs the script do nothing but prepare and show the", sep="")
+    print("    file names")
+    
+# ............................................................................ #
+def helpDo () :
+    print("details on keyword: do")
+    
+    print(colors.bold)
+    print("  remote do '<bash command>'", colors.reset)
+    print(colors.reset)
+    print("Executes <bash command> on the server.")
+    print()
+    
+    print("Before execution, remote makes sure that the current working directory is as")
+    print("  specified in <serverdir>.")
+    print()
+    print("Quotation marks around the command are obligatory, if <bash command> contains")
+    print("  whitespaces. The command itself needs to be enclosed in 'single quotes.'")
+    print("    A command that relies on quotes is possible if it can be expressed")
+    print("    with \"double quotes\".")
+    print("    There can be only one layer of quotes.")
+    print()
+    print("Multiple instructions can be separated using semicolons (;).")
+    print()
+    print("Note that the server shell may not be compatible with your commands.")
+    print("  type 'echo $0' to find the name of the current shell.")
+    print()
+    print("For more sophisticated instructions, consider the keywords execute and pipe.")
+    print()
+    print("Examples:")
+    print(colors.bold, "  remote do ls serverdir ~/project", colors.reset, sep="")
+    print("will show the content of '~/project' on the server.")
+    print(colors.bold, "  remote do 'mkdir \"white spaces\"' serverdir ~/project", colors.reset, sep="")
+    print("will create the subfolder 'white spaces' in '~/project/' on the server.")
+    print(colors.bold, "  remote do 'ls; ls -l'", colors.reset, sep="")
+    print("will perform 'ls' and 'ls -l' in sequence.")
 
 # ---------------------------------------------------------------------------- #
 def varsPage() :
@@ -503,17 +590,37 @@ def varsPage() :
 # ============================================================================ #
 # tests
 
+#print()
+#print("=" * 10)
+#print()
+#print(sys.stdin)
+#for line in sys.stdin :
+    #print(line)
+
+
 
 # ============================================================================ #
 # main
 
+# ---------------------------------------------------------------------------- #
+# behaviour
+
 atexit.register(freeLock)
+random.shuffle(machines)
+
+# ---------------------------------------------------------------------------- #
+# globals
+
 cmdline = sys.argv[1:]
 
 keywordProcs = {
   "push" : push,
-  "pull" : pull
+  "pull" : pull,
+  "do"   : do
 }
+
+# ---------------------------------------------------------------------------- #
+# main menu
 
 print(
     colors.fg.green,
@@ -524,6 +631,7 @@ print(
     sep=""
 )
 
+
 if len(cmdline) == 0    : helpPage()
 cmdline[0] = cmdline[0].lower()
 if cmdline[0] == "help" : helpPage()
@@ -533,7 +641,7 @@ if cmdline[0] == "vars" : varsPage()
 if cmdline[0] in keywordProcs :
   keywordProcs[cmdline[0]]()
 else :
-    print(f"unrecognized keyword, '{cmdline[0]}'")
+    print(f"unrecognized keyword, '{cmdline[0]}'\n")
     helpPage()
 
 quit()
