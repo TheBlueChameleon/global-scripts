@@ -1,0 +1,7 @@
+#!/bin/bash
+for INFILE in ./*.dot; do
+  OUTFILE="${INFILE%%.dot}.pdf"
+  echo "generating $OUTFILE from $INFILE"
+  dot -Tpdf -o $OUTFILE $INFILE
+done
+echo "done."

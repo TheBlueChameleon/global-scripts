@@ -1,0 +1,556 @@
+#!/usr/bin/python3
+
+# ============================================================================ #
+#dependencies
+
+import os
+import sys
+import subprocess
+import atexit
+
+#from subprocess import Popen, PIPE, STDOUT
+
+# ============================================================================ #
+# constants
+
+shell     = "/usr/bin/bash"                                                     # start this bash on the server
+
+machines  = ["phy310", "phy311", "phy312", "phy313", "phy314",                  # try if either of these machines is responsive 
+             "phy315", "phy316", "phy317", "phy318", "phy319", 
+             "phy320"]
+machineID = -1                                                                  # send all commands to this machine
+
+standardCWD = os.path.abspath( os.path.curdir )                                 # used to create locks on files
+
+params = {
+    "username"  : "has13223",
+    "localdir"  : "./",                                                         # functionally, and sometimes literally, the local CWD
+    "server"    : "uni-regensburg.de",
+    "serverdir" : "~/remote-test/"                                                       # functionally, and sometimes literally, the server CWD
+}
+
+# ============================================================================ #
+# output facility
+
+class colors:
+    reset          = '\033[0m'
+    bold           = '\033[01m'
+    disable        = '\033[02m'
+    underline      = '\033[04m'
+    reverse        = '\033[07m'
+    strikethrough  = '\033[09m'
+    invisible      = '\033[08m'
+    
+    class fg:
+        black      = '\033[30m'
+        red        = '\033[31m'
+        green      = '\033[32m'
+        orange     = '\033[33m'
+        blue       = '\033[34m'
+        purple     = '\033[35m'
+        cyan       = '\033[36m'
+        lightgrey  = '\033[37m'
+        darkgrey   = '\033[90m'
+        lightred   = '\033[91m'
+        lightgreen = '\033[92m'
+        yellow     = '\033[93m'
+        lightblue  = '\033[94m'
+        pink       = '\033[95m'
+        lightcyan  = '\033[96m'
+    class bg:
+        black      = '\033[40m'
+        red        = '\033[41m'
+        green      = '\033[42m'
+        orange     = '\033[43m'
+        blue       = '\033[44m'
+        purple     = '\033[45m'
+        cyan       = '\033[46m'
+        lightgrey  = '\033[47m'
+
+# ---------------------------------------------------------------------------- #
+
+def utterWarning (
+    text,
+    headline = 'Warning',
+    indent   = 4,
+    headColors = colors.bold + colors.fg.lightred + colors.bg.black,
+    textColors = colors.reset
+) :
+    print(headColors + headline + textColors)
+    for line in text.split('\n') :
+        print(' ' * indent + line)
+
+# ---------------------------------------------------------------------------- #
+
+def raiseColored(text = 'RuntimeError') :
+    raise RuntimeError(colors.fg.lightred + colors.bold + text + colors.reset)
+
+# ============================================================================ #
+# proc
+
+def findfreeMachine () :
+    global machineID
+    
+    print("Attempting to find a free machine...")
+    for i, machine in enumerate(machines) :
+        if os.path.isfile( os.path.join(standardCWD, f"lock-on-{machine}") ) : continue
+        
+        print(f"  trying '{machine}' ...")
+        print( "    ", end="", flush=True)
+        process = subprocess.Popen(
+            [f"ssh -tt -o ConnectTimeout=2 has13223@{machine}.{params['server']} 'exit'"],
+            shell=True
+        )
+        
+        process.wait()
+        if process.returncode == 0 : 
+            os.system( "touch " + os.path.join(standardCWD, f"lock-on-{machine}") )
+            machineID = i
+            return
+        
+    else :
+        raiseColored("Could not find a free machine -- aborting.")
+
+# ............................................................................ #
+def freeLock () :
+    global machineID
+    if machineID != -1 :
+        print("releasing lock on machine ID #" + str(machineID), "alias", machines[machineID])
+        os.system( "rm " + os.path.join(standardCWD, f"lock-on-{machines[machineID]}") )
+
+
+# ---------------------------------------------------------------------------- #
+def parseOptionals(start = 1) :
+    global params
+    
+    iterable = cmdline[start:].__iter__()
+    for word in iterable :
+        if word in params :
+            params[word] = next(iterable)
+        else :
+            raiseColored(f"Syntax Error: Detected invalid optional keyword '{word}'")
+
+# ............................................................................ #
+def parsePushPull() :
+    if len(cmdline) == 1 :
+        raiseColored("missing required information: filename to push/pull")
+    
+    primaryname = cmdline[1]
+    aliasname   = os.path.basename(primaryname)
+    flag_tar    = False
+    flag_gz     = False
+    flag_test   = False
+    
+    currentKW = 2
+    while True:
+        if           currentKW  == len(cmdline) : break
+        elif cmdline[currentKW].lower() == "as" :
+            if currentKW + 1 == len(cmdline) :
+                raiseColored("missing required information: as filename")
+            aliasname = cmdline[currentKW + 1]
+            currentKW += 2
+            
+        elif cmdline[currentKW].lower() == "tar" :
+            flag_tar = True
+            currentKW += 1
+            if         currentKW  == len(cmdline) : break
+            if cmdline[currentKW].lower() == "gz" :
+                flag_gz = True
+                currentKW += 1
+            
+        elif cmdline[currentKW].lower() == "test" :
+            flag_test = True
+            currentKW += 1
+            
+        else :
+            break
+    
+    
+    parseOptionals(currentKW)
+    
+    return primaryname, aliasname, flag_tar, flag_gz, flag_test
+
+# ---------------------------------------------------------------------------- #
+def push () :
+    localName, serverName, flag_tar, flag_gz, flag_test = parsePushPull()
+    
+    localName  = os.path.join(params["localdir" ], localName)
+    serverName = os.path.join(params["serverdir"], serverName)
+    
+    if flag_test :
+        print("Testing parameters for push.")
+    else :
+        print("Ready to push.")
+    
+    print("  current working directory:", os.path.abspath(os.curdir) )
+    print("  file to push             :", localName )
+    print("  alias on server          :", serverName)
+    print("  compactify as tar        :", flag_tar  )
+    print("  compress as gzip         :", flag_gz   )
+    
+    if flag_tar :
+        tarName = os.path.split(localName)[-1] + ".tar"
+        tarOptions = "-cf"
+        serverName += ".tar"
+        
+        if flag_gz :
+            tarName   += ".gz"
+            tarOptions = "-czf"
+            serverName += ".gz"
+            
+        print("  archive file name        :", tarName)
+            
+        cmd = f"tar {tarOptions} {tarName} {localName}"
+        
+        print()
+        print("packing command:")
+        print(colors.bold, "\t", cmd, colors.reset)
+        
+        if not flag_test :
+            os.system(cmd)
+        
+        localName = tarName
+    
+    
+    if not flag_test : 
+        print()
+        findfreeMachine()
+    
+    cmd = f"scp {localName} {params['username']}@{machines[machineID]}.{params['server']}:{serverName}"
+    
+    print()
+    print("push command:")
+    print(colors.bold, "\t", cmd)
+    print(colors.reset)
+    
+    if not flag_test : 
+        os.system(cmd)
+    
+    if flag_tar :
+        tarOptions = "-xzf" if flag_gz else "-xf"
+        
+        cmd = f"ssh -tt {params['username']}@{machines[machineID]}.{params['server']} 'cd {params['serverdir']}; tar {tarOptions} {serverName}'"
+        
+        print("unpacking command:")
+        print(colors.bold, "\t", cmd)
+        print(colors.reset)
+        
+        if not flag_test : 
+            os.system(cmd)
+    
+    print()
+    print("done.")
+
+# ............................................................................ #
+def pull () :
+    serverName, localName, flag_tar, flag_gz, flag_test = parsePushPull()
+    
+    localName  = os.path.join(params["localdir" ], localName)
+    serverName = os.path.join(params["serverdir"], serverName)
+    
+    if flag_test :
+        print("Testing parameters for pull.")
+    else :
+        print("Ready to pull.")
+        
+    print("  current working directory:", os.path.abspath(os.curdir) )
+    print("  file to pull             :", serverName)
+    print("  alias on local machine   :", localName )
+    print("  compactify as tar        :", flag_tar  )
+    print("  compress as gzip         :", flag_gz   )
+    
+    if flag_tar :
+        components = os.path.split(serverName)
+        
+        if len(components[-1]) == 0 :
+            tarName = components[ 0]
+        elif '*' in   components[-1] :
+            tarName = components[ 0]
+        elif '?' in   components[-1] :
+            tarName = components[ 0]
+        elif '%' in   components[-1] :
+            tarName = components[ 0]
+        else :
+            tarName = components[-1]
+        
+        tarName += ".tar"
+        tarOptions = "-cf"
+        
+        
+        if flag_gz :
+            tarName   += ".gz"
+            tarOptions = "-czf"
+            
+        print("  archive file name        :", tarName)
+    
+    
+    if not flag_test : 
+        print()
+        findfreeMachine()
+    
+    
+    if flag_tar :
+        cmd = f"ssh -tt {params['username']}@{machines[machineID]}.{params['server']} 'tar {tarOptions} {tarName} {serverName}'"
+        
+        print()
+        print("packing command:")
+        print(colors.bold, "\t", cmd, colors.reset)
+        
+        if not flag_test :
+            os.system(cmd)
+        
+        serverName = tarName
+    
+    cmd = f"scp {params['username']}@{machines[machineID]}.{params['server']}:{serverName} {localName}"
+    
+    print()
+    print("pull command:")
+    print(colors.bold, "\t", cmd)
+    print(colors.reset)
+    
+    if not flag_test :
+        os.system(cmd)
+    
+    
+    if flag_tar :
+        tarOptions = "-xzf" if flag_gz else "-xf"
+        tarName = os.path.join( localName, os.path.basename(tarName) )
+        
+        cmd = f"tar {tarOptions} {tarName} --directory {localName}"
+        
+        print("unpacking command:")
+        print(colors.bold, "\t", cmd, colors.reset)
+        print()
+        
+        if not flag_test :
+            os.system(cmd)
+    
+    print("done.")
+    
+# ---------------------------------------------------------------------------- #
+def helpPage() :
+    pages = {
+        ""     : helpGeneric,
+        "push" : helpPush,
+        "pull" : helpPull
+    }
+    
+    if len(cmdline) in (0, 1) : 
+        pages[""]()
+        exit()
+        
+    if cmdline[1] in pages :
+        pages[cmdline[1]]()
+        exit
+    
+    exit()
+
+# ............................................................................ #
+def helpGeneric() :
+    print("usage:")
+    print(colors.bold)
+    print("  remote <keyword> [<keyword parameters>}")
+    print("                   [username <username>]")
+    print("                   [server <server>]")
+    print("                   [serverdir <serverdir>]")
+    print("                   [localdir <localdir>]")
+    print(colors.reset)
+    print("where <keyword> is one of these:")
+    print(colors.bold)
+    print("  push <local filename> [as <server filename>] [tar [gz]] [test]", colors.reset)
+    print("    uploads a file to the server.")
+    print(colors.bold, end="")
+    print("  pull <server file>  [as <local filename>] [tar [gz]] [test]", colors.reset)
+    print("    downloads a file or directory from the server.")
+    print(colors.bold, end="")
+    print("  run <script file>", colors.reset)
+    print("    run <script file> on the server.")
+    print("      Before execution of the script, a bash in <serverdir> is started.")
+    print("      The script file may be given with an absolute path or relative to the cwd.")
+    print("      Note that heredocs are supported.")
+    print(colors.bold, end="")
+    print("  do '<command>'", colors.reset)
+    print("    execute single line command <command> on the server.")
+    print("      before execution of the script, a bash in <serverdir> is started")
+    print(colors.bold, end="")
+    print("  sequence <local sequence file>", colors.reset)
+    print("    perform a sequence of remote commands as specified in <local sequence file>.")
+    print("      Each line of a sequence file is supposed to be a valid remote line without")
+    print("      the remote command itself. For example, a sequence file could look like:")
+    print("        push settings.ini")
+    print("        do 'project settings.ini'")
+    print("        pull results/ tar localdir run_17")
+    print("      Leading whitespaces will be ignored.")
+    print(colors.bold, end="")
+    print("  vars", colors.reset)
+    print("    show values of the runtime variables.")
+    print("      optional parameters will be parsed.")
+    print()
+    print("type 'remote help <keyword> for more details'")
+    print()
+    print("the optional keyword specify behaviour as follows:")
+    print(colors.bold)
+    print("  username <username>", colors.reset)
+    print("    sets the username for the logon on the server.")
+    print(colors.bold, end="")
+    print("  server <server>", colors.reset)
+    print("    sets the name of the server.")
+    print(colors.bold, end="")
+    print("  serverdir <serverdir>", colors.reset)
+    print("    sets the CWD on the server.")
+    print(colors.bold, end="")
+    print("  localdir <localdir>", colors.reset)
+    print("    sets the local working directory.")
+    print()
+    print(colors.bold, "FOR THE USE OF WILDCARS, PUT EVERYTHING IN QUOTATION MARKS!", colors.reset, sep="")
+    print()
+
+# ............................................................................ #
+def helpPush () :
+    print("details on keyword: push")
+    
+    print(colors.bold)
+    print("  remote push <local filename> [as <server filename>] [tar [gz]] [test]")
+    print(colors.reset)
+    print("uploads a file to the server.")
+    
+    print(colors.bold)
+    print("<local filename>", colors.reset," is the file to be uploaded.", sep="")
+    print("  It is assumed to be located in the current working directory.")
+    print("    (see help on optional parameter localdir)")
+    print("  It may contain wildcards, and will then push all matching files.")
+    print(colors.bold, "  FOR THE USE OF WILDCARS, PUT EVERYTHING IN QUOTATION MARKS!", colors.reset, sep="")
+    print("  Example:")
+    print(colors.bold, "    remote push \"foo/*\"", colors.reset, sep="")
+    print("  will upload all files in './foo/' to the server into '<serverdir>'.")
+    print("  On the other hand:")
+    print(colors.bold, "    remote push foo/*", colors.reset, sep="")
+    print("  will likely fail, if there is more than one file matching the pattern.")
+    print("    (bash is stupid, sometimes.)")
+    
+    print(colors.bold)
+    print("<server filename>", colors.reset," is the file name on the server.", sep="")
+    print("  It may be a path specification or a full file name.")
+    print("  If <server filename> is a relative file/path specification, it will be")
+    print("    to be relative to <serverdir>. (See help on optional keyword serverdir)")
+    print("  If <server filename> is an absolute file/path specification, serverdir")
+    print("    will be ignored.")
+    print("  If <server filename> is a path specification without filename, the local")
+    print("    filename will be used.")
+    print("  If unspecified, <server filename> will default to <serverdir>")
+    print("  Wildcards are invalid in <server filename>.")
+    print("  Examples:")
+    print(colors.bold, "    remote push foo.bar", colors.reset, sep="")
+    print("  will upload './foo.bar' to the server as '<serverdir>/foo.bar'.")
+    print(colors.bold, "    remote push foo.bar as foo", colors.reset, sep="")
+    print("  will upload './foo.bar' to the server as '<serverdir>/foo'.")
+    print(colors.bold, "    remote push \"bar/*\" as bar/", colors.reset, sep="")
+    print("  will upload the content of'./bar/' into '<serverdir>/bar/'.")
+    print(colors.bold, "    remote push \"bar/foo\" as /location/foobar", colors.reset, sep="")
+    print("  will upload './bar/foo' as '/location/foobar'.")
+    print(colors.bold, "    remote push \"bar/*\" as bar/foo", colors.reset, sep="")
+    print("  will do strange things. Do not do that.")
+    print(colors.bold, "    remote push foo.bar as *", colors.reset, sep="")
+    print("  is invalid and will cause an error message.")
+    
+    print(colors.bold)
+    print("tar", colors.reset," is a flag that instructs the script to put <local filename> into a tar", sep="")
+    print("    archive before upload. On the server, the archive will be unpacked.")
+    print("  The tar file will be constructed in the folder containing <local filename>.")
+    print("  The tar file name will be derived from <server filename>.")
+    print("  Examples:")
+    print(colors.bold, "    remote push foo.bar tar", colors.reset, sep="")
+    print("  will create and upload './foo.bar.tar'")
+    print(colors.bold, "    remote \"push /foo/*\" as foobar tar", colors.reset, sep="")
+    print("  will create and upload './foo.tar' as '<serverdir>/foobar.tar' and unpack into")
+    print("    '<serverdir>/foo/'")
+    print(colors.bold, "    remote \"push /foo/*\" as foobar/ tar", colors.reset, sep="")
+    print("  will create and upload './foo.tar' as '<serverdir>/foobar.tar' and unpack into")
+    print("    '<serverdir>/foobar/'")
+    
+    print(colors.bold)
+    print("tar", colors.reset," is a flag that instructs the script to apply gnuzip compression to the", sep="")
+    print("  tar archives. I.e., file names will end in '.tar.gz' and file size will likely")
+    print("    be smaller.")
+    
+    print(colors.bold)
+    print("test", colors.reset," is a flag that instructs the script do nothing but prepare and show the", sep="")
+    print("    file names")
+
+# ............................................................................ #
+def helpPull () :
+    print("details on keyword: pull")
+    
+    print(colors.bold)
+    print("  remote pull <server file>  [as <local filename>] [tar [gz]] [test]", colors.reset)
+    print(colors.reset)
+    print("uploads a file to the server.")
+    
+    
+    print("      The behaviour of push is mirrored.")
+    print("      The download goes into cwd, unless specified otherwise using the")
+    print("      localdir optional keyword")
+    
+
+# ---------------------------------------------------------------------------- #
+def varsPage() :
+    parseOptionals()
+    
+    for key, value in params.items() :
+        print(f"{key:15}: {value}")
+    exit()
+    
+# ============================================================================ #
+# tests
+
+
+# ============================================================================ #
+# main
+
+atexit.register(freeLock)
+cmdline = sys.argv[1:]
+
+keywordProcs = {
+  "push" : push,
+  "pull" : pull
+}
+
+print(
+    colors.fg.green,
+    "# ============================================================================ #\n"
+    f"# {'Remote Control Tool':^76} #\n"
+    "# ============================================================================ #\n",
+    colors.reset,
+    sep=""
+)
+
+if len(cmdline) == 0    : helpPage()
+cmdline[0] = cmdline[0].lower()
+if cmdline[0] == "help" : helpPage()
+if cmdline[0] == "vars" : varsPage()
+
+
+if cmdline[0] in keywordProcs :
+  keywordProcs[cmdline[0]]()
+else :
+    print(f"unrecognized keyword, '{cmdline[0]}'")
+    helpPage()
+
+quit()
+
+# ============================================================================ #
+# shenanigans
+
+print( os.path.join('~/MA', 'filename') )
+print( os.path.join('~/MA', '/filename') )
+
+print( os.path.basename("~/MA/stuff.data") )
+
+
+
+print( os.path.abspath(os.curdir) )
+print( cmdline )
+
+os.chdir("stuff")
+os.system("ls -a")
+#os.chdir(params["localdir"])
